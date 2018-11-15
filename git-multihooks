@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+
+
+get_hook_dir() {
+	local config_hooks_path=$(git config core.hooksPath)
+
+	if [[ -n "$config_hooks_path" ]]; then
+		echo "$config_hooks_path"
+		return 0
+	fi
+
+	if [[ -n "$GIT_DIR" ]]; then
+		local env_hooks_path="$GIT_DIR/hooks/"
+		echo "$env_hooks_path"
+		return 0
+	fi
+
+	local rev_hooks_path="$(git rev-parse --git-dir)/hooks/"
+
+	if [[ -n "$rev_hooks_path" ]]; then
+		echo "$rev_hooks_path"
+		return 0
+	fi
+}
+
+install_master_hook() {
+	local hook_type="$1"
+	local hook_dir=$(get_hook_dir)
+
+	echo "git multihooks run $hook_type \"\$@\"" > "$hook_dir/$hook_type"
+	chmod +x "$hook_dir/$hook_type"
+}
+
+add_hook() {
+	local hook_type="$1"
+	local path_to_hook="$2"
+
+	if [[ ! -x "$path_to_hook" ]]; then
+		echo "The path to the hook script doesn't exist or is not executable."
+		exit 4
+	fi
+
+	local hook_dir=$(get_hook_dir)
+	local hook_type_dir="$hook_dir/$hook_type.d/"
+
+	if [[ ! -d "$hook_type_dir" ]]; then
+		mkdir "$hook_type_dir"
+	fi
+
+	cp "$path_to_hook" "$hook_type_dir"
+
+	if [[ ! -e "$hook_dir/$hook_type" ]]; then
+		install_master_hook "$hook_type"
+	fi
+}
+
+remove_hook() {
+	local hook_type="$1"
+	local hook_name="$2"
+
+	local hook_dir=$(get_hook_dir)
+	local hook_type_dir="$hook_dir/$hook_type.d/"
+	local path_to_hook="$hook_type_dir/$hook_name"
+
+	if [[ ! -f "$path_to_hook" ]]; then
+		echo "That hook doesn't exist to remove it."
+		exit 5
+	fi
+
+	rm "$path_to_hook"
+}
+
+run_hook() {
+	local hook_type="$1"
+	local hooks_dir=$(get_hook_dir)
+
+	return_code=0
+
+	for script in "$hooks_dir/$hook_type.d"/*; do
+		echo "Running $script"
+		"$script" "$@"  #executes the script file
+		sub_return_code=$?
+
+		if [[ $sub_return_code -ne 0 ]]; then
+			return_code=1
+		fi
+	done
+
+	return $return_code
+}
+
+
+command="$1"
+hook_type="$2"
+path_to_hook="$3"
+
+if [[ -z "$command" ]]; then
+	echo "Please supply a command."
+	exit 1
+fi
+if [[ -z "$hook_type" ]]; then
+	echo "Please supply a hook type."
+	exit 2
+fi
+
+case "$command" in
+	add)
+		if [[ -z "$path_to_hook" ]]; then
+			echo "Please supply a path to a script."
+			exit 3
+		fi
+		add_hook "$hook_type" "$path_to_hook"
+		;;
+	remove)
+		if [[ -z "$path_to_hook" ]]; then
+			echo "Please supply a hook name."
+			exit 3
+		fi
+		remove_hook "$hook_type" "$path_to_hook"
+		;;
+	run)
+		run_hook "$hook_type" "${@:3}"
+		exit $?
+		;;
+esac
